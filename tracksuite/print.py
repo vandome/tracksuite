@@ -41,7 +41,7 @@ def get_state_icon(node):
         str: Unicode icon for the node state.
 
     Raises:
-        ValueError: If the node state is unknown.
+        ValueError: If the state is not one of ecflow.State's members.
     """
     if node.get_state() == ecflow.State.complete:
         return "✅"
@@ -53,6 +53,12 @@ def get_state_icon(node):
         return "🔄"
     elif node.get_state() == ecflow.State.aborted:
         return "❌"
+    elif node.get_state() == ecflow.State.unknown:
+        # ecflow.State has exactly six members and `unknown` is one of them: it is the
+        # state of every node in a definition that has not been loaded onto a server.
+        # Raising here made this module unusable for printing a suite before it is
+        # deployed, which is precisely when reviewing the tree is most useful.
+        return "❔"
     else:
         raise ValueError(f"Unknown state: {node.get_state()}")
 

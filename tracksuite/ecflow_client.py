@@ -1,5 +1,6 @@
 from __future__ import annotations  # ← annotations are strings at run‑time
 
+from collections.abc import Sequence
 from typing import Any, cast
 
 from tracksuite import LOGGER as log
@@ -8,6 +9,30 @@ try:
     import ecflow
 except ModuleNotFoundError:
     ecflow = cast(Any, None)
+
+
+#: Maps a node's attribute COLLECTION onto the setter that writes one of them.
+#:
+#: The two names differ and neither side can be derived from the other: ecflow exposes
+#: collections in the plural (``node.events``, with no ``node.event``), while this
+#: client exposes explicitly typed single-attribute setters in the singular
+#: (``set_event``, with no ``set_events``). Building one name from the other used to
+#: leave ``update_node_attributes`` unable to complete — it read the collection with
+#: the plural and then looked for a setter of the same name, which does not exist.
+#:
+#: The third element is the coercion each setter's signature asks for: ``set_event``
+#: takes a bool and turns it into "set"/"clear", while the others reach
+#: ``client.alter`` which requires strings — and ``meter.value()`` is an int.
+ATTRIBUTE_SETTERS: dict[str, tuple[str, type]] = {
+    "variables": ("set_variable", str),
+    "events": ("set_event", bool),
+    "meters": ("set_meter", str),
+    "labels": ("set_label", str),
+}
+
+#: Attribute collections synchronised by default. Kept here so the caller and the
+#: walker cannot disagree about the spelling; ``replace.py`` builds on this.
+DEFAULT_SYNC_ATTRIBUTES: tuple[str, ...] = ("events", "meters", "labels")
 
 
 class EcflowClient:
@@ -139,22 +164,36 @@ class EcflowClient:
         attributes: list,
     ):
         """
-        Update the attributes of a node based on the old node's attributes.
-        This function updates the following attributes on the server:
-            - state
-            - dstate
-            - defstatus
+        Carry the old node's attribute values over to the new one.
+
+        `attributes` names attribute COLLECTIONS in the plural, as ecflow exposes them
+        (`events`, `meters`, `labels`, `variables`); each is written back one attribute
+        at a time through the matching setter in `ATTRIBUTE_SETTERS`.
+
+        Only attributes present on BOTH nodes are touched, matched by name, and only
+        where the value actually differs — so an attribute the new definition
+        introduces keeps its definition value, and one it drops is simply gone.
         """
         node_path = new_node.get_abs_node_path()
         for attr in attributes:
-            old_attributes = getattr(old_node, attr)  # need to use plural form)
+            entry = ATTRIBUTE_SETTERS.get(attr)
+            if entry is None:
+                log.warning(
+                    f"cannot synchronise attribute collection '{attr}': "
+                    f"expected one of {sorted(ATTRIBUTE_SETTERS)}"
+                )
+                continue
+            setter_name, as_value = entry
+            setter = getattr(self, setter_name)
+
+            old_attributes = getattr(old_node, attr)
             for old_attr in old_attributes:
-                # special case for event, where name_or_number is required instead of name
+                # events are identified by name_or_number: an unnamed event is its number
                 old_name = getattr(
                     old_attr, "name_or_number", getattr(old_attr, "name")
                 )()
                 old_value = getattr(old_attr, "value")()
-                new_attributes = getattr(new_node, attr)  # need to use plural form)
+                new_attributes = getattr(new_node, attr)
                 for new_attr in new_attributes:
                     new_name = getattr(
                         new_attr, "name_or_number", getattr(new_attr, "name")
@@ -162,7 +201,7 @@ class EcflowClient:
                     new_value = getattr(new_attr, "value")()
                     if new_name == old_name:
                         if new_value != old_value:
-                            getattr(self, "set_" + attr)(node_path, old_name, old_value)
+                            setter(node_path, old_name, as_value(old_value))
 
     def update_node_repeat(self, new_node: ecflow.Node, old_node: ecflow.Node):
         """
@@ -179,7 +218,7 @@ class EcflowClient:
         self,
         new_node: ecflow.Node,
         old_node: ecflow.Node,
-        attributes: list = ["event", "meter", "label"],
+        attributes: Sequence[str] = DEFAULT_SYNC_ATTRIBUTES,
         skip_status: bool = False,
         skip_attributes: bool = False,
         skip_repeat: bool = False,

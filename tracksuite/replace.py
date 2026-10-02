@@ -2,7 +2,7 @@ import argparse
 import os
 
 from tracksuite import LOGGER as log
-from tracksuite.ecflow_client import EcflowClient
+from tracksuite.ecflow_client import DEFAULT_SYNC_ATTRIBUTES, EcflowClient
 
 
 def replace_on_server(
@@ -38,7 +38,7 @@ def replace_on_server(
     )
 
     node_path = node_path or f"/{name}"
-    attributes = ["events", "meters", "labels"]
+    attributes = list(DEFAULT_SYNC_ATTRIBUTES)
     if sync_variables:
         attributes.append("variables")
 
